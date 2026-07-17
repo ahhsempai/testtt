@@ -3525,92 +3525,89 @@ function Library:CreateWindow(...)
                 -- TODO: add cursor fade?
                 local State = InputService.MouseIconEnabled;
 
-                -- Some executors don't actually render Triangle.Filled (you just get a hollow outline),
-                -- so instead of relying on it we manually fill the cursor triangle with a stack of
-                -- horizontal Line objects (a simple scanline fill). This always looks solid regardless
-                -- of executor.
-                local FillLineCount = 14;
-                local FillLines = {};
+                local Cursor, CursorOutline, Layers, LayerCount;
 
-                for i = 1, FillLineCount do
-                    local Line = Drawing.new('Line');
-                    Line.Thickness = 2;
-                    Line.Visible = true;
-                    FillLines[i] = Line;
-                end;
+                local Ok, Err = pcall(function()
+                    -- Some executors don't actually render Triangle.Filled (you just get a hollow
+                    -- outline), so besides the normal filled triangle we also draw a handful of
+                    -- smaller, nested (unfilled) triangles shrinking towards the centroid. That
+                    -- "onion layer" trick visually fills the shape regardless of whether Filled
+                    -- works on this executor, and it only uses the Triangle draw type (which we
+                    -- already know renders fine here).
+                    LayerCount = 6;
+                    Layers = {};
 
-                local CursorOutline = Drawing.new('Triangle');
-                CursorOutline.Thickness = 1;
-                CursorOutline.Filled = false;
-                CursorOutline.Color = Color3.new(0, 0, 0);
-                CursorOutline.Visible = true;
-
-                local function UpdateFill(A, B, C, Color)
-                    local Pts = { A, B, C };
-                    table.sort(Pts, function(p1, p2) return p1.Y < p2.Y end);
-
-                    local P1, P2, P3 = Pts[1], Pts[2], Pts[3];
-                    local TotalHeight = P3.Y - P1.Y;
-
-                    if TotalHeight <= 0 then
-                        for i = 1, FillLineCount do
-                            FillLines[i].Visible = false;
-                        end;
-
-                        return;
+                    for i = 1, LayerCount do
+                        local Layer = Drawing.new('Triangle');
+                        Layer.Thickness = 2;
+                        Layer.Filled = false;
+                        Layer.Visible = true;
+                        Layers[i] = Layer;
                     end;
 
-                    for i = 1, FillLineCount do
-                        local t = (i - 1) / (FillLineCount - 1);
-                        local y = P1.Y + t * TotalHeight;
+                    Cursor = Drawing.new('Triangle');
+                    Cursor.Thickness = 1;
+                    Cursor.Filled = true;
+                    Cursor.Visible = true;
 
-                        local Alpha = (y - P1.Y) / TotalHeight;
-                        local xLong = P1.X + (P3.X - P1.X) * Alpha;
+                    CursorOutline = Drawing.new('Triangle');
+                    CursorOutline.Thickness = 1;
+                    CursorOutline.Filled = false;
+                    CursorOutline.Color = Color3.new(0, 0, 0);
+                    CursorOutline.Visible = true;
 
-                        local xShort;
-                        if y <= P2.Y and (P2.Y - P1.Y) > 0 then
-                            local Beta = (y - P1.Y) / (P2.Y - P1.Y);
-                            xShort = P1.X + (P2.X - P1.X) * Beta;
-                        elseif (P3.Y - P2.Y) > 0 then
-                            local Beta = (y - P2.Y) / (P3.Y - P2.Y);
-                            xShort = P2.X + (P3.X - P2.X) * Beta;
-                        else
-                            xShort = xLong;
+                    while Toggled and ScreenGui.Parent do
+                        InputService.MouseIconEnabled = false;
+
+                        local mPos = InputService:GetMouseLocation();
+
+                        local PointA = Vector2.new(mPos.X, mPos.Y);
+                        local PointB = Vector2.new(mPos.X + 16, mPos.Y + 6);
+                        local PointC = Vector2.new(mPos.X + 6, mPos.Y + 16);
+                        local Centroid = Vector2.new(
+                            (PointA.X + PointB.X + PointC.X) / 3,
+                            (PointA.Y + PointB.Y + PointC.Y) / 3
+                        );
+
+                        Cursor.Color = Library.AccentColor;
+                        Cursor.PointA = PointA;
+                        Cursor.PointB = PointB;
+                        Cursor.PointC = PointC;
+
+                        for i = 1, LayerCount do
+                            local Scale = 1 - ((i - 1) / LayerCount) * 0.9;
+                            local Layer = Layers[i];
+
+                            Layer.Color = Library.AccentColor;
+                            Layer.PointA = Centroid:Lerp(PointA, Scale);
+                            Layer.PointB = Centroid:Lerp(PointB, Scale);
+                            Layer.PointC = Centroid:Lerp(PointC, Scale);
                         end;
 
-                        local Line = FillLines[i];
-                        Line.Color = Color;
-                        Line.From = Vector2.new(math.min(xLong, xShort), y);
-                        Line.To = Vector2.new(math.max(xLong, xShort), y);
-                        Line.Visible = true;
+                        CursorOutline.PointA = PointA;
+                        CursorOutline.PointB = PointB;
+                        CursorOutline.PointC = PointC;
+
+                        RenderStepped:Wait();
                     end;
-                end;
+                end);
 
-                while Toggled and ScreenGui.Parent do
-                    InputService.MouseIconEnabled = false;
-
-                    local mPos = InputService:GetMouseLocation();
-
-                    local PointA = Vector2.new(mPos.X, mPos.Y);
-                    local PointB = Vector2.new(mPos.X + 16, mPos.Y + 6);
-                    local PointC = Vector2.new(mPos.X + 6, mPos.Y + 16);
-
-                    UpdateFill(PointA, PointB, PointC, Library.AccentColor);
-
-                    CursorOutline.PointA = PointA;
-                    CursorOutline.PointB = PointB;
-                    CursorOutline.PointC = PointC;
-
-                    RenderStepped:Wait();
+                if not Ok then
+                    warn('[Library] Custom cursor error: ' .. tostring(Err));
                 end;
 
                 InputService.MouseIconEnabled = State;
 
-                for i = 1, FillLineCount do
-                    FillLines[i]:Remove();
-                end;
+                pcall(function()
+                    if Cursor then Cursor:Remove(); end;
+                    if CursorOutline then CursorOutline:Remove(); end;
 
-                CursorOutline:Remove();
+                    if Layers then
+                        for i = 1, LayerCount do
+                            if Layers[i] then Layers[i]:Remove(); end;
+                        end;
+                    end;
+                end);
             end);
         end;
 
@@ -3687,3 +3684,4 @@ Players.PlayerRemoving:Connect(OnPlayerChange);
 
 getgenv().Library = Library
 return Library
+
